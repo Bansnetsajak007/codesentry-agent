@@ -13,6 +13,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from codesentry.agent.llm import LLMClient
+from codesentry.agent.loop import run_agent
+from codesentry.config import get_settings
 from codesentry.graph.builder import build_graph
 from codesentry.graph.store import (
     load_graph,
@@ -81,6 +84,50 @@ def stats(repo_path: Path = typer.Argument(..., help="Path to the repository."))
             f"[bold]Parse errors:[/bold] {resolution.get('files_with_parse_errors')}"
         )
     _print_language_table(per_language_file_counts(graph))
+
+
+@app.command()
+def ask(
+    repo_path: Path = typer.Argument(..., help="Path to the indexed repository."),
+    question: str = typer.Argument(..., help="Question to ask about the repository."),
+    max_iterations: int = typer.Option(15, help="Max agent tool-loop iterations."),
+    model: str | None = typer.Option(None, help="Override the configured model."),
+) -> None:
+    """Answer a QUESTION about REPO_PATH with citations to real file:line locations."""
+
+    repo_path = repo_path.resolve()
+    graph_path = _graph_path(repo_path)
+    if not graph_path.is_file():
+        console.print(
+            f"[red]No graph found[/red] at {graph_path}. Run `codesentry index` first."
+        )
+        raise typer.Exit(code=1)
+
+    settings = get_settings()
+    if not settings.openai_api_key:
+        console.print("[red]OPENAI_API_KEY is not set.[/red] Add it to your .env.")
+        raise typer.Exit(code=1)
+
+    graph = load_graph(graph_path)
+    llm = LLMClient(
+        api_key=settings.openai_api_key,
+        model=model or settings.model,
+        base_url=settings.openai_base_url,
+        max_tokens=settings.max_tokens,
+    )
+    with console.status("Thinking..."):
+        answer = run_agent(
+            question, graph, llm, repo_root=repo_path, max_iterations=max_iterations
+        )
+
+    console.print(answer.answer)
+    if answer.citations:
+        table = Table(title="Citations")
+        table.add_column("File")
+        table.add_column("Lines", justify="right")
+        for citation in answer.citations:
+            table.add_row(citation.file, f"{citation.start_line}-{citation.end_line}")
+        console.print(table)
 
 
 def _print_language_table(counts: dict[str, int]) -> None:
