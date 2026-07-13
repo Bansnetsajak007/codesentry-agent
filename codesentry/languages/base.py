@@ -4,11 +4,34 @@ registry and the get_adapter_for_file helper that dispatches by file extension."
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
 from codesentry.graph.schema import Edge, Node
+
+
+@dataclass
+class ImportIndex:
+    """Repo-wide lookup tables the builder passes to adapters during cross-file
+    import resolution. All paths are repo-relative POSIX strings (FILE node ids)."""
+
+    paths: set[str] = field(default_factory=set)
+    by_stem: dict[str, list[str]] = field(default_factory=dict)
+    package_of: dict[str, str | None] = field(default_factory=dict)
+    files_by_package: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _module_basename(module: str) -> str:
+    """Reduce an import module string to its final path/name component, splitting on
+    both path separators and dots (handles JS './models', Python 'a.b.models', Go
+    'ex.com/x/models', and Java 'com.example.User')."""
+
+    cleaned = module.strip().strip("\"'`")
+    parts = [p for p in re.split(r"[./\\]", cleaned) if p and p != ".."]
+    return parts[-1] if parts else ""
 
 
 class LanguageAdapter(ABC):
@@ -21,11 +44,22 @@ class LanguageAdapter(ABC):
 
     language_name: ClassVar[str]
     file_extensions: ClassVar[set[str]]
+    # True for languages where files in the same directory form a package and can
+    # reference each other's definitions without an explicit import (Go, Java).
+    package_level_visibility: ClassVar[bool] = False
 
     @abstractmethod
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         """Parse ``source`` (the raw bytes of ``path``) and return the local nodes
         and local edges it defines."""
+
+    def resolve_import(self, module: str, importer: str, index: ImportIndex) -> str | None:
+        """Map an import ``module`` string (from ``importer``) to a repo-relative
+        file path, or return None. The default matches by unique filename stem;
+        adapters override for language-specific module syntax."""
+
+        matches = index.by_stem.get(_module_basename(module), [])
+        return matches[0] if len(matches) == 1 else None
 
 
 ADAPTERS: dict[str, LanguageAdapter] = {}

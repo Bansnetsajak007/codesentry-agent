@@ -31,6 +31,7 @@ class GoAdapter(LanguageAdapter):
 
     language_name = "go"
     file_extensions = {".go"}
+    package_level_visibility = True
 
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         file_path = path.as_posix()
@@ -54,6 +55,7 @@ class GoAdapter(LanguageAdapter):
                 metadata={
                     "imports": _collect_imports(root, source),
                     "package": _package_name(root, source),
+                    "parse_error": root.has_error,
                 },
             )
             nodes.append(file_node)

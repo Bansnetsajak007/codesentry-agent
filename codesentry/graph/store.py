@@ -67,7 +67,7 @@ def per_language_file_counts(graph: nx.MultiDiGraph) -> dict[str, int]:
 def _build_metadata(
     graph: nx.MultiDiGraph, repo_path: Path | None
 ) -> dict[str, Any]:
-    return {
+    metadata: dict[str, Any] = {
         "codesentry_version": __version__,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
         "repo_path": str(repo_path.resolve()) if repo_path is not None else None,
@@ -76,6 +76,10 @@ def _build_metadata(
         "edge_count": graph.number_of_edges(),
         "files_per_language": per_language_file_counts(graph),
     }
+    summary = graph.graph.get("summary")
+    if isinstance(summary, dict):
+        metadata["resolution"] = summary
+    return metadata
 
 
 def _git_commit(repo_path: Path) -> str | None:

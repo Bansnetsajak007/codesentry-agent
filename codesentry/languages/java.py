@@ -15,7 +15,7 @@ import tree_sitter_java as tsjava
 from tree_sitter import Language, Node as TSNode, Parser
 
 from codesentry.graph.schema import Edge, EdgeType, Node, NodeType, make_node_id
-from codesentry.languages.base import LanguageAdapter, register_adapter
+from codesentry.languages.base import ImportIndex, LanguageAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,17 @@ class JavaAdapter(LanguageAdapter):
 
     language_name = "java"
     file_extensions = {".java"}
+    package_level_visibility = True
+
+    def resolve_import(self, module: str, importer: str, index: ImportIndex) -> str | None:
+        parts = module.strip().split(".")
+        if len(parts) >= 2:
+            class_name = parts[-1]
+            package = ".".join(parts[:-1])
+            for candidate in index.files_by_package.get(package, []):
+                if Path(candidate).stem == class_name:
+                    return candidate
+        return super().resolve_import(module, importer, index)
 
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         file_path = path.as_posix()
@@ -68,6 +79,7 @@ class JavaAdapter(LanguageAdapter):
                 metadata={
                     "imports": _collect_imports(root, source),
                     "package": _package_name(root, source),
+                    "parse_error": root.has_error,
                 },
             )
             nodes.append(file_node)

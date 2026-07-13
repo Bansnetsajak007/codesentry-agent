@@ -8,13 +8,14 @@ only real in-file targets (CONTAINS, INHERITS, intra-file CALLS) are emitted her
 from __future__ import annotations
 
 import logging
+import posixpath
 from pathlib import Path
 
 import tree_sitter_javascript
 from tree_sitter import Language, Node as TSNode, Parser
 
 from codesentry.graph.schema import Edge, EdgeType, Node, NodeType, make_node_id
-from codesentry.languages.base import LanguageAdapter, register_adapter
+from codesentry.languages.base import ImportIndex, LanguageAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,24 @@ _LANGUAGE = Language(tree_sitter_javascript.language())
 _PARSER = Parser(_LANGUAGE)
 
 _FUNCTION_VALUES = ("arrow_function", "function_expression")
+_JS_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
+
+
+def _resolve_relative(module: str, importer: str, index: ImportIndex, extensions: tuple[str, ...]) -> str | None:
+    """Resolve a relative ECMAScript import (``./x``/``../x``) against the importer's
+    directory, trying each extension and an index file, or return None."""
+
+    if not module.startswith("."):
+        return None
+    base = posixpath.normpath(posixpath.join(posixpath.dirname(importer), module))
+    if base in index.paths:
+        return base
+    for ext in extensions:
+        if f"{base}{ext}" in index.paths:
+            return f"{base}{ext}"
+        if f"{base}/index{ext}" in index.paths:
+            return f"{base}/index{ext}"
+    return None
 
 
 class JavaScriptAdapter(LanguageAdapter):
@@ -29,6 +48,12 @@ class JavaScriptAdapter(LanguageAdapter):
 
     language_name = "javascript"
     file_extensions = {".js", ".jsx", ".mjs", ".cjs"}
+
+    def resolve_import(self, module: str, importer: str, index: ImportIndex) -> str | None:
+        resolved = _resolve_relative(module, importer, index, _JS_EXTENSIONS)
+        if resolved is not None:
+            return resolved
+        return super().resolve_import(module, importer, index)
 
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         file_path = path.as_posix()
@@ -49,7 +74,10 @@ class JavaScriptAdapter(LanguageAdapter):
                 language=self.language_name,
                 start_line=1,
                 end_line=root.end_point[0] + 1,
-                metadata={"imports": _collect_imports(root, source)},
+                metadata={
+                    "imports": _collect_imports(root, source),
+                    "parse_error": root.has_error,
+                },
             )
             nodes.append(file_node)
 

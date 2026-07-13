@@ -9,13 +9,14 @@ in-file targets (CONTAINS, INHERITS, IMPLEMENTS, intra-file CALLS) are emitted."
 from __future__ import annotations
 
 import logging
+import posixpath
 from pathlib import Path
 
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node as TSNode, Parser
 
 from codesentry.graph.schema import Edge, EdgeType, Node, NodeType, make_node_id
-from codesentry.languages.base import LanguageAdapter, register_adapter
+from codesentry.languages.base import ImportIndex, LanguageAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ _PARSER_TSX = Parser(_TSX_LANGUAGE)
 
 _FUNCTION_VALUES = ("arrow_function", "function_expression")
 _CLASS_DECLS = ("class_declaration", "abstract_class_declaration")
+_TS_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts")
 
 
 class TypeScriptAdapter(LanguageAdapter):
@@ -33,6 +35,20 @@ class TypeScriptAdapter(LanguageAdapter):
 
     language_name = "typescript"
     file_extensions = {".ts", ".mts", ".cts", ".tsx"}
+
+    def resolve_import(self, module: str, importer: str, index: ImportIndex) -> str | None:
+        if module.startswith("."):
+            base = posixpath.normpath(
+                posixpath.join(posixpath.dirname(importer), module)
+            )
+            if base in index.paths:
+                return base
+            for ext in _TS_EXTENSIONS:
+                if f"{base}{ext}" in index.paths:
+                    return f"{base}{ext}"
+                if f"{base}/index{ext}" in index.paths:
+                    return f"{base}/index{ext}"
+        return super().resolve_import(module, importer, index)
 
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         file_path = path.as_posix()
@@ -54,7 +70,10 @@ class TypeScriptAdapter(LanguageAdapter):
                 language=self.language_name,
                 start_line=1,
                 end_line=root.end_point[0] + 1,
-                metadata={"imports": _collect_imports(root, source)},
+                metadata={
+                    "imports": _collect_imports(root, source),
+                    "parse_error": root.has_error,
+                },
             )
             nodes.append(file_node)
 

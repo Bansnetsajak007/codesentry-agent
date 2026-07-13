@@ -73,6 +73,13 @@ def stats(repo_path: Path = typer.Argument(..., help="Path to the repository."))
         f"[bold]Nodes:[/bold] {graph.number_of_nodes()}  "
         f"[bold]Edges:[/bold] {graph.number_of_edges()}"
     )
+    resolution = meta.get("resolution")
+    if isinstance(resolution, dict):
+        console.print(
+            f"[bold]Unresolved calls:[/bold] {resolution.get('unresolved_calls')}  "
+            f"[bold]Skipped files:[/bold] {resolution.get('files_skipped')}  "
+            f"[bold]Parse errors:[/bold] {resolution.get('files_with_parse_errors')}"
+        )
     _print_language_table(per_language_file_counts(graph))
 
 

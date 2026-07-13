@@ -15,7 +15,7 @@ import tree_sitter_python
 from tree_sitter import Language, Node as TSNode, Parser
 
 from codesentry.graph.schema import Edge, EdgeType, Node, NodeType, make_node_id
-from codesentry.languages.base import LanguageAdapter, register_adapter
+from codesentry.languages.base import ImportIndex, LanguageAdapter, register_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,19 @@ class PythonAdapter(LanguageAdapter):
 
     language_name = "python"
     file_extensions = {".py", ".pyi"}
+
+    def resolve_import(self, module: str, importer: str, index: ImportIndex) -> str | None:
+        rel = "/".join(p for p in module.strip().split(".") if p)
+        if not rel:
+            return None
+        candidates = [f"{rel}.py", f"{rel}/__init__.py"]
+        parent = Path(importer).parent.as_posix()
+        if parent not in ("", "."):
+            candidates += [f"{parent}/{rel}.py", f"{parent}/{rel}/__init__.py"]
+        for candidate in candidates:
+            if candidate in index.paths:
+                return candidate
+        return super().resolve_import(module, importer, index)
 
     def parse_file(self, path: Path, source: bytes) -> tuple[list[Node], list[Edge]]:
         file_path = path.as_posix()
@@ -52,7 +65,10 @@ class PythonAdapter(LanguageAdapter):
                 start_line=1,
                 end_line=root.end_point[0] + 1,
                 docstring=_module_docstring(root, source),
-                metadata={"imports": _collect_imports(root, source)},
+                metadata={
+                    "imports": _collect_imports(root, source),
+                    "parse_error": root.has_error,
+                },
             )
             nodes.append(file_node)
 
