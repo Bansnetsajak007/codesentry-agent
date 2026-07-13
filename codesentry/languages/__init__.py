@@ -5,4 +5,5 @@ each concrete adapter module, which self-registers into the adapter registry."""
 
 from codesentry.languages import javascript as _javascript  # noqa: F401
 from codesentry.languages import python as _python  # noqa: F401
+from codesentry.languages import typescript as _typescript  # noqa: F401
 
