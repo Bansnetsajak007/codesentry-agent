@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Environments & secrets
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# CodeSentry runtime
+.codesentry/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
