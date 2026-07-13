@@ -43,5 +43,11 @@ python_version = "3.11"
 strict = true
 files = ["codesentry"]
 
+# networkx ships no type stubs; treat it as untyped rather than pulling in an
+# out-of-spec stub dependency.
+[[tool.mypy.overrides]]
+module = ["networkx.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

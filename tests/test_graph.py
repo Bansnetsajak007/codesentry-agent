@@ -1,10 +1,14 @@
-"""Tests for the universal graph schema: node/edge construction, enum typing,
-independent metadata defaults, id formatting, serialization round-trips, and the
-extra-field rejection that guards adapters against typo'd field names."""
+"""Tests for the universal graph schema plus the step-4 builder/store slice:
+node/edge construction, enum typing, independent metadata defaults, id formatting,
+serialization round-trips, extra-field rejection, and building/persisting a graph
+from the pure-Python fixture."""
+
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from codesentry.graph.builder import build_graph
 from codesentry.graph.schema import (
     Edge,
     EdgeType,
@@ -12,6 +16,14 @@ from codesentry.graph.schema import (
     NodeType,
     make_node_id,
 )
+from codesentry.graph.store import (
+    load_graph,
+    load_metadata,
+    per_language_file_counts,
+    save_graph,
+)
+
+PY_FIXTURE = Path(__file__).parent / "fixtures" / "sample_python"
 
 
 def _sample_node() -> Node:
@@ -136,3 +148,31 @@ def test_edge_rejects_unknown_field() -> None:
             type=EdgeType.CALLS,
             bogus="nope",  # type: ignore[call-arg]
         )
+
+
+def test_build_graph_on_python_fixture() -> None:
+    graph = build_graph(PY_FIXTURE)
+    assert per_language_file_counts(graph) == {"python": 4}
+    assert graph.has_node("models.py::User")
+    assert graph.has_node("models.py::AdminUser")
+    # INHERITS edge survives the merge into the MultiDiGraph.
+    types = {
+        data["type"]
+        for _, _, data in graph.edges("models.py::AdminUser", data=True)
+    }
+    assert EdgeType.INHERITS.value in types
+
+
+def test_save_and_load_round_trip(tmp_path: Path) -> None:
+    graph = build_graph(PY_FIXTURE)
+    graph_path = tmp_path / ".codesentry" / "graph.pkl"
+    save_graph(graph, graph_path, repo_path=PY_FIXTURE)
+
+    loaded = load_graph(graph_path)
+    assert loaded.number_of_nodes() == graph.number_of_nodes()
+    assert loaded.number_of_edges() == graph.number_of_edges()
+
+    meta = load_metadata(graph_path)
+    assert meta["files_per_language"] == {"python": 4}
+    assert meta["node_count"] == graph.number_of_nodes()
+    assert meta["codesentry_version"]
