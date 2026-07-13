@@ -46,7 +46,7 @@ files = ["codesentry"]
 # networkx ships no type stubs; treat it as untyped rather than pulling in an
 # out-of-spec stub dependency.
 [[tool.mypy.overrides]]
-module = ["networkx.*"]
+module = ["networkx.*", "unidiff.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
