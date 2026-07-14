@@ -25,7 +25,35 @@ from codesentry.languages.base import ImportIndex, get_adapter_for_file
 
 logger = logging.getLogger(__name__)
 
-_ALWAYS_IGNORE = {".git", ".codesentry"}
+# Directories always skipped regardless of .gitignore: VCS/tool internals plus
+# common dependency, build-output, and cache folders. This keeps a large repo from
+# crawling into node_modules or vendored dependencies even when its .gitignore is
+# missing, elsewhere, or does not list them.
+_ALWAYS_IGNORE = {
+    ".git",
+    ".codesentry",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "bower_components",
+    "vendor",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    "coverage",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    "target",
+    ".gradle",
+}
 _DEF_TYPES = (NodeType.CLASS, NodeType.FUNCTION, NodeType.METHOD)
 
 

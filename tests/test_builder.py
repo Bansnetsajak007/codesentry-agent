@@ -6,7 +6,7 @@ cross-language link over a shared name), ambiguity dropping, and the run summary
 from pathlib import Path
 
 from codesentry.graph.builder import build_graph
-from codesentry.graph.schema import EdgeType
+from codesentry.graph.schema import EdgeType, NodeType
 from codesentry.graph.store import per_language_file_counts
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -90,6 +90,30 @@ def test_ambiguous_call_is_dropped(tmp_path: Path) -> None:
     assert not any(
         u == "main.py::run" and v.endswith("::helper") for (u, v) in calls
     )
+
+
+def test_vendor_and_build_dirs_are_skipped_without_gitignore(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.ts").write_text(
+        "export function main(): void {}\n", encoding="utf-8"
+    )
+    nested = tmp_path / "node_modules" / "pkg" / "node_modules" / "dep"
+    nested.mkdir(parents=True)
+    (nested / "index.d.ts").write_text(
+        "export declare function x(): void;\n", encoding="utf-8"
+    )
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "bundle.js").write_text("function y(){}\n", encoding="utf-8")
+
+    graph = build_graph(tmp_path)
+    file_paths = {
+        data["node"].file_path
+        for _, data in graph.nodes(data=True)
+        if data["node"].type is NodeType.FILE
+    }
+    assert "src/app.ts" in file_paths
+    assert not any("node_modules" in path for path in file_paths)
+    assert not any(path.startswith("dist/") for path in file_paths)
 
 
 def test_summary_is_attached() -> None:
