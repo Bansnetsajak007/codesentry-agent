@@ -27,7 +27,7 @@ def get_settings() -> Settings:
 
     load_dotenv()
     return Settings(
-        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        openai_api_key=os.getenv("MODEL_API_KEY") or None,
         model=os.getenv("CODESENTRY_MODEL", "gpt-4.1"),
         max_tokens=int(os.getenv("CODESENTRY_MAX_TOKENS", "4096")),
         log_level=os.getenv("CODESENTRY_LOG_LEVEL", "INFO"),
