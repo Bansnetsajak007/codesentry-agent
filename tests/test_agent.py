@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from codesentry.agent.llm import ChatResponse, ToolCall
+from codesentry.agent.llm import ChatResponse, StructuredOutputError, ToolCall
 from codesentry.agent.loop import AgentIterationLimitError, run_agent
 from codesentry.agent.schemas import AnswerWithCitations, Citation
 from codesentry.graph.builder import build_graph
@@ -23,12 +23,17 @@ class FakeLLM:
         responses: list[ChatResponse],
         final: AnswerWithCitations,
         default: ChatResponse | None = None,
+        structured_error: bool = False,
+        completion_text: str = "",
     ) -> None:
         self._responses = list(responses)
         self._final = final
         self._default = default
+        self._structured_error = structured_error
+        self._completion_text = completion_text
         self.chat_calls: list[list[dict]] = []
         self.parsed_messages: list[dict] | None = None
+        self.completed_messages: list[dict] | None = None
 
     def chat_with_tools(self, messages, tools):  # type: ignore[no-untyped-def]
         self.chat_calls.append([dict(m) for m in messages])
@@ -39,7 +44,13 @@ class FakeLLM:
 
     def parse_structured(self, messages, schema):  # type: ignore[no-untyped-def]
         self.parsed_messages = [dict(m) for m in messages]
+        if self._structured_error:
+            raise StructuredOutputError("provider does not support structured outputs")
         return self._final
+
+    def complete(self, messages):  # type: ignore[no-untyped-def]
+        self.completed_messages = [dict(m) for m in messages]
+        return self._completion_text
 
 
 def _graph():
@@ -92,6 +103,22 @@ def test_iteration_limit_raises() -> None:
     with pytest.raises(AgentIterationLimitError):
         run_agent("loop", _graph(), llm, repo_root=PY_FIXTURE, max_iterations=3)  # type: ignore[arg-type]
     assert len(llm.chat_calls) == 3
+
+
+def test_falls_back_to_plain_completion_when_structured_output_unsupported() -> None:
+    # Simulate a provider (e.g. a non-OpenAI model) that does not honor strict
+    # structured outputs: parse_structured raises, and the loop uses complete().
+    llm = FakeLLM(
+        [_stop()],
+        AnswerWithCitations(answer="unused", citations=[]),
+        structured_error=True,
+        completion_text="The class is defined in models.py:4 and used widely.",
+    )
+    result = run_agent("Where is User?", _graph(), llm, repo_root=PY_FIXTURE)  # type: ignore[arg-type]
+    assert "models.py:4" in result.answer
+    # Citations are recovered from the prose via regex.
+    assert result.citations == [Citation(file="models.py", start_line=4, end_line=4)]
+    assert llm.completed_messages is not None
 
 
 def test_malformed_tool_arguments_are_fed_back() -> None:

@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from pydantic import ValidationError
+
 from codesentry.agent import tools
-from codesentry.agent.llm import LLMClient
+from codesentry.agent.llm import LLMClient, StructuredOutputError
 from codesentry.agent.schemas import (
     AnswerWithCitations,
     FindSymbolInput,
@@ -145,3 +147,33 @@ def test_llm_parse_structured_returns_model(mocker) -> None:  # type: ignore[no-
     client = LLMClient(api_key="x", model="gpt-4.1")
     result = client.parse_structured([{"role": "user", "content": "x"}], AnswerWithCitations)
     assert result.answer == "ok"
+
+
+def test_llm_parse_structured_raises_structured_output_error(mocker) -> None:  # type: ignore[no-untyped-def]
+    # A provider that returns non-conforming JSON makes the SDK raise a pydantic
+    # ValidationError, which LLMClient normalizes to StructuredOutputError.
+    try:
+        AnswerWithCitations.model_validate({"thought": "x", "action": "final"})
+    except ValidationError as exc:
+        validation_error = exc
+    fake = mocker.MagicMock()
+    fake.beta.chat.completions.parse.side_effect = validation_error
+    mocker.patch("codesentry.agent.llm.OpenAI", return_value=fake)
+
+    client = LLMClient(api_key="x", model="bigpickle")
+    with pytest.raises(StructuredOutputError):
+        client.parse_structured([{"role": "user", "content": "x"}], AnswerWithCitations)
+
+
+def test_llm_complete_returns_content(mocker) -> None:  # type: ignore[no-untyped-def]
+    message = mocker.MagicMock(content="plain answer with models.py:4")
+    choice = mocker.MagicMock(message=message)
+    response = mocker.MagicMock(choices=[choice])
+    fake = mocker.MagicMock()
+    fake.chat.completions.create.return_value = response
+    mocker.patch("codesentry.agent.llm.OpenAI", return_value=fake)
+
+    client = LLMClient(api_key="x", model="bigpickle")
+    assert client.complete([{"role": "user", "content": "x"}]) == (
+        "plain answer with models.py:4"
+    )

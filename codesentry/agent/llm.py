@@ -9,9 +9,17 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class StructuredOutputError(RuntimeError):
+    """Raised when the model's reply cannot be parsed into the requested schema.
+
+    This typically means the provider does not support strict structured outputs
+    (common with non-OpenAI models behind an OpenAI-compatible endpoint); callers
+    can catch it and fall back to a plain completion."""
 
 
 @dataclass(frozen=True)
@@ -91,18 +99,35 @@ class LLMClient:
         )
 
     def parse_structured(self, messages: list[dict[str, Any]], schema: type[T]) -> T:
-        """Call the model and parse its reply into ``schema`` via structured outputs."""
+        """Call the model and parse its reply into ``schema`` via structured outputs.
 
-        response = self._client.beta.chat.completions.parse(
-            model=self._model,
-            messages=cast(Any, messages),
-            response_format=schema,
-            max_tokens=self._max_tokens,
-        )
+        Raises StructuredOutputError if the reply does not conform to the schema
+        (e.g. a provider that does not enforce strict structured outputs)."""
+
+        try:
+            response = self._client.beta.chat.completions.parse(
+                model=self._model,
+                messages=cast(Any, messages),
+                response_format=schema,
+                max_tokens=self._max_tokens,
+            )
+        except ValidationError as exc:
+            raise StructuredOutputError(str(exc)) from exc
         parsed = response.choices[0].message.parsed
         if parsed is None:
-            raise ValueError("Model did not return a parseable structured response")
+            raise StructuredOutputError("model returned no parseable structured response")
         return parsed
+
+    def complete(self, messages: list[dict[str, Any]]) -> str:
+        """Call the model for a plain text completion (no tools, no structured
+        format) and return its content. Used as a provider-agnostic fallback."""
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=cast(Any, messages),
+            max_tokens=self._max_tokens,
+        )
+        return response.choices[0].message.content or ""
 
 
 def _parse_arguments(raw: str) -> dict[str, Any]:

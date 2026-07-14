@@ -5,6 +5,7 @@ usage, and producing a final structured AnswerWithCitations."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +13,21 @@ import networkx as nx
 from pydantic import ValidationError
 from rich.console import Console
 
-from codesentry.agent.llm import ChatResponse, LLMClient, ToolCall
+from codesentry.agent.llm import (
+    ChatResponse,
+    LLMClient,
+    StructuredOutputError,
+    ToolCall,
+)
 from codesentry.agent.prompts import FINAL_ANSWER_INSTRUCTION, QA_SYSTEM_PROMPT
-from codesentry.agent.schemas import AnswerWithCitations
+from codesentry.agent.schemas import AnswerWithCitations, Citation
 from codesentry.agent.tools import TOOL_REGISTRY, ToolContext, openai_tool_schemas
 
 _console = Console(stderr=True)
+
+_CITATION_RE = re.compile(
+    r"([\w./\\-]+\.(?:py|pyi|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|java)):(\d+)"
+)
 
 
 class AgentIterationLimitError(RuntimeError):
@@ -89,7 +99,31 @@ def _finalize(llm: LLMClient, messages: list[dict[str, Any]]) -> AnswerWithCitat
     final_messages = messages + [
         {"role": "user", "content": FINAL_ANSWER_INSTRUCTION}
     ]
-    return llm.parse_structured(final_messages, AnswerWithCitations)
+    try:
+        return llm.parse_structured(final_messages, AnswerWithCitations)
+    except StructuredOutputError:
+        # The provider did not honor strict structured outputs (common with
+        # non-OpenAI models). Fall back to a plain completion and recover any
+        # file:line citations from the prose the model already produced.
+        _console.print(
+            "[dim]structured output unsupported by provider; using plain completion"
+            "[/dim]"
+        )
+        text = llm.complete(final_messages)
+        return AnswerWithCitations(answer=text, citations=_extract_citations(text))
+
+
+def _extract_citations(text: str) -> list[Citation]:
+    seen: set[tuple[str, int]] = set()
+    citations: list[Citation] = []
+    for path, line_str in _CITATION_RE.findall(text):
+        line = int(line_str)
+        key = (path, line)
+        if key in seen:
+            continue
+        seen.add(key)
+        citations.append(Citation(file=path, start_line=line, end_line=line))
+    return citations
 
 
 def _assistant_message(response: ChatResponse) -> dict[str, Any]:
