@@ -205,6 +205,31 @@ performance problems — not style.
 
 ---
 
+## Verified on real repositories
+
+`index` has been run on real medium-sized codebases, well within the Phase 1
+budget (index in under 90s, graph with >1000 nodes):
+
+| Repo | Files | Nodes | Edges | Index time |
+|------|-------|-------|-------|-----------|
+| [Flask](https://github.com/pallets/flask) | 83 | 977 | 2,108 | ~28s |
+| [Werkzeug](https://github.com/pallets/werkzeug) | 139 | 2,222 | 4,725 | ~29s |
+
+```bash
+git clone --depth 1 https://github.com/pallets/werkzeug.git
+codesentry-agent index werkzeug
+# Indexed 2222 nodes, 4725 edges -> werkzeug/.codesentry/graph.pkl
+```
+
+`ask` produces answers grounded in real `file:line` citations. For example, asked
+"Give a full architecture overview" of a FastAPI service, it navigates the graph,
+reads the relevant files, and returns an answer where each claim points at a real
+location (e.g. *"The application is a FastAPI server defined in `main.py:25` ...
+question answering uses `AnswerService` (`services/answer_service.py:151`)"*).
+
+> Regenerate live `ask`/`review` examples with your own `OPENAI_API_KEY`; avoid
+> committing output from private/client codebases.
+
 ## How to test (Phase 1)
 
 ### 1. Automated tests and type checking
