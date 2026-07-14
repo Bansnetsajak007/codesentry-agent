@@ -36,7 +36,7 @@ strict order defined in `docs/PHASE_1_SPEC.md`:
 **Quality gates:** `101 passing tests`, `mypy --strict` clean on `codesentry/`,
 no `openai` import outside `agent/llm.py`. No test ever calls the real API.
 
-> **Known gap:** the spec lists a `codesentry languages` command that is not yet
+> **Known gap:** the spec lists a `codesentry-agent languages` command that is not yet
 > implemented; the supported languages are documented in the table below instead.
 > The `ask` and `review` commands require an `OPENAI_API_KEY` (see below).
 
@@ -136,12 +136,12 @@ Environment variables (see `.env.example`):
 
 ## Usage
 
-Run the CLI with `uv run codesentry <command>`.
+Run the CLI with `uv run codesentry-agent <command>`.
 
 ### `index` — build the graph
 
 ```bash
-uv run codesentry index /path/to/repo
+uv run codesentry-agent index /path/to/repo
 ```
 
 ```
@@ -162,7 +162,7 @@ of metadata (counts, per-language breakdown, git commit, resolution summary).
 ### `stats` — inspect an indexed repo
 
 ```bash
-uv run codesentry stats /path/to/repo
+uv run codesentry-agent stats /path/to/repo
 ```
 
 ```
@@ -182,7 +182,7 @@ Unresolved calls: 16  Skipped files: 0  Parse errors: 0
 ### `ask` — question answering (requires `OPENAI_API_KEY`)
 
 ```bash
-uv run codesentry ask /path/to/repo "Where is the user repository and what calls it?"
+uv run codesentry-agent ask /path/to/repo "Where is the user repository and what calls it?"
 ```
 
 Runs the agent tool-loop and prints an answer whose every factual claim is backed
@@ -193,10 +193,10 @@ by a citation to a real `file:line`, followed by a citations table. Options:
 
 ```bash
 # from a file
-uv run codesentry review /path/to/repo --diff change.diff
+uv run codesentry-agent review /path/to/repo --diff change.diff
 
 # or from stdin
-git diff | uv run codesentry review /path/to/repo
+git diff | uv run codesentry-agent review /path/to/repo
 ```
 
 Prints line-level comments grouped by file (severity `INFO`/`WARNING`/`ERROR`),
@@ -222,8 +222,8 @@ uv run mypy                # strict, on codesentry/
 projects under `tests/fixtures/` — index one (or point at any real repo):
 
 ```bash
-uv run codesentry index tests/fixtures/sample_python
-uv run codesentry stats tests/fixtures/sample_python
+uv run codesentry-agent index tests/fixtures/sample_python
+uv run codesentry-agent stats tests/fixtures/sample_python
 ```
 
 To see the language-agnostic graph merge several languages into one graph, copy a
@@ -233,15 +233,15 @@ few fixtures into one directory and index it:
 mkdir /tmp/mixed
 cp tests/fixtures/sample_python/*.py tests/fixtures/sample_go/*.go \
    tests/fixtures/sample_ts/*.ts /tmp/mixed/
-uv run codesentry index /tmp/mixed
-uv run codesentry stats /tmp/mixed
+uv run codesentry-agent index /tmp/mixed
+uv run codesentry-agent stats /tmp/mixed
 ```
 
 ### 3. Manual `ask` / `review` (needs `OPENAI_API_KEY` in `.env`)
 
 ```bash
-uv run codesentry index tests/fixtures/sample_python
-uv run codesentry ask tests/fixtures/sample_python \
+uv run codesentry-agent index tests/fixtures/sample_python
+uv run codesentry-agent ask tests/fixtures/sample_python \
   "What does UserRepository.count return, and is it correct?"
 
 # review the fixture's intentional off-by-one bug
@@ -253,7 +253,7 @@ printf '%s\n' \
 '-        # BUG: off-by-one; should return len(self._users).' \
 '-        return len(self._users) + 1' \
 '+        return len(self._users)' \
-| uv run codesentry review tests/fixtures/sample_python
+| uv run codesentry-agent review tests/fixtures/sample_python
 ```
 
 Each `tests/fixtures/sample_*` project intentionally contains an obvious bug

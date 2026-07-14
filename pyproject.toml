@@ -1,5 +1,5 @@
 [project]
-name = "codesentry"
+name = "codesentry-agent"
 version = "0.1.0"
 description = "Language-agnostic code-understanding assistant that builds a graph model of a repository and uses an LLM agent to answer questions and review code with real repo grounding."
 readme = "README.md"
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codesentry = "codesentry.cli:app"
+codesentry-agent = "codesentry.cli:app"
 
 [dependency-groups]
 dev = [
