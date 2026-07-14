@@ -93,6 +93,41 @@ def test_review_diff_one_call_per_file() -> None:
     assert [c.file for c in comments] == ["utils.py"]
 
 
+def test_review_diff_lenient_fallback_recovers_nonconforming_comments() -> None:
+    from codesentry.agent.llm import StructuredOutputError
+
+    class NonStrictLLM:
+        """Mimics a provider that ignores the strict schema: parse_structured
+        rejects the reply, and complete() returns comments missing severity/message
+        with the text under 'suggestion' (exactly the observed failure)."""
+
+        def __init__(self) -> None:
+            self.completed = False
+
+        def parse_structured(self, messages, schema):  # type: ignore[no-untyped-def]
+            raise StructuredOutputError("provider does not enforce strict schema")
+
+        def complete(self, messages):  # type: ignore[no-untyped-def]
+            self.completed = True
+            return (
+                '```json\n'
+                '{"comments": [{"file": "repository.py", "line": 20, '
+                '"suggestion": "off-by-one: count returns len + 1"}]}\n'
+                '```'
+            )
+
+    graph = build_graph(PY_FIXTURE)
+    llm = NonStrictLLM()
+    comments = review_diff(REPO_DIFF, graph, llm)  # type: ignore[arg-type]
+
+    assert llm.completed  # the fallback path ran
+    assert len(comments) == 1
+    assert comments[0].file == "repository.py"
+    assert comments[0].line == 20
+    assert comments[0].severity == "warning"  # defaulted from missing severity
+    assert "off-by-one" in comments[0].message  # recovered from 'suggestion'
+
+
 def test_review_diff_no_comments() -> None:
     graph = build_graph(PY_FIXTURE)
     llm = FakeReviewLLM([ReviewResult(comments=[])])
