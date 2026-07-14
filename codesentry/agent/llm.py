@@ -8,7 +8,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
-from openai import OpenAI
+from openai import (
+    ContentFilterFinishReasonError,
+    LengthFinishReasonError,
+    OpenAI,
+)
 from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
@@ -111,7 +115,14 @@ class LLMClient:
                 response_format=schema,
                 max_tokens=self._max_tokens,
             )
-        except ValidationError as exc:
+        except (
+            ValidationError,
+            LengthFinishReasonError,
+            ContentFilterFinishReasonError,
+        ) as exc:
+            # Non-conforming JSON, a truncated (length-limited) reply, or a
+            # content-filtered reply all mean we cannot get a valid structured
+            # object; let the caller fall back to a plain completion.
             raise StructuredOutputError(str(exc)) from exc
         parsed = response.choices[0].message.parsed
         if parsed is None:

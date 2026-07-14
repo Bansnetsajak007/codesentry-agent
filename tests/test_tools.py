@@ -165,6 +165,21 @@ def test_llm_parse_structured_raises_structured_output_error(mocker) -> None:  #
         client.parse_structured([{"role": "user", "content": "x"}], AnswerWithCitations)
 
 
+def test_llm_parse_structured_raises_on_length_limit(mocker) -> None:  # type: ignore[no-untyped-def]
+    # A truncated structured reply makes the SDK raise LengthFinishReasonError,
+    # which LLMClient normalizes to StructuredOutputError so the loop can fall back.
+    from openai import LengthFinishReasonError
+
+    error = LengthFinishReasonError(completion=mocker.MagicMock())
+    fake = mocker.MagicMock()
+    fake.beta.chat.completions.parse.side_effect = error
+    mocker.patch("codesentry.agent.llm.OpenAI", return_value=fake)
+
+    client = LLMClient(api_key="x", model="bigpickle")
+    with pytest.raises(StructuredOutputError):
+        client.parse_structured([{"role": "user", "content": "x"}], AnswerWithCitations)
+
+
 def test_llm_complete_returns_content(mocker) -> None:  # type: ignore[no-untyped-def]
     message = mocker.MagicMock(content="plain answer with models.py:4")
     choice = mocker.MagicMock(message=message)
