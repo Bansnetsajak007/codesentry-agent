@@ -185,7 +185,7 @@ def review(
 
 _SEVERITY_COLORS = {"error": "red", "warning": "yellow", "info": "cyan"}
 
-
+#client initialization 
 def _build_llm(settings: Settings, model: str | None) -> LLMClient:
     assert settings.openai_api_key is not None  # callers verify before building
     return LLMClient(
