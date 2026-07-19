@@ -145,6 +145,43 @@ class TypeScriptAdapter(LanguageAdapter):
                     decl, source, file_path, prefix, container_id, jsdoc,
                     nodes, edges, name_to_ids,
                 )
+            elif decl.type == "expression_statement" and container.type == "program":
+                expr = decl.named_children[0] if decl.named_children else None
+                if expr is not None and expr.type == "call_expression":
+                    self._add_call_arg_callbacks(
+                        expr, source, file_path, prefix, container_id,
+                        nodes, edges, name_to_ids,
+                    )
+
+    def _add_call_arg_callbacks(
+        self,
+        call: TSNode,
+        source: bytes,
+        file_path: str,
+        prefix: str,
+        container_id: str,
+        nodes: list[Node],
+        edges: list[Edge],
+        name_to_ids: dict[str, list[str]],
+    ) -> None:
+        """Capture function expressions passed as arguments of a top-level call
+        (Express route handlers, listen callbacks) as FUNCTION nodes named after
+        the call, e.g. ``router.post(/insertproduct)``."""
+
+        args = call.child_by_field_name("arguments")
+        base = _callback_base_name(call, source)
+        if args is None or base is None:
+            return
+        for arg in args.named_children:
+            if arg.type not in _FUNCTION_VALUES:
+                continue
+            name = base
+            if name in name_to_ids:
+                name = f"{base}@L{arg.start_point[0] + 1}"
+            self._add_function(
+                arg, arg, name, prefix, file_path, container_id, [], None,
+                source, nodes, edges, name_to_ids,
+            )
 
     def _collect_declarators(
         self,
@@ -368,6 +405,34 @@ def _walk(node: TSNode, skip_ids: frozenset[int] = frozenset()):  # type: ignore
         if child.id in skip_ids:
             continue
         yield from _walk(child, skip_ids)
+
+
+def _callback_base_name(call: TSNode, source: bytes) -> str | None:
+    """Derive a deterministic name for callbacks passed to ``call``: the callee
+    (``router.post``) plus its first string argument (``/insertproduct``), giving
+    ``router.post(/insertproduct)``. Returns None for unnameable callees."""
+
+    callee = call.child_by_field_name("function")
+    if callee is None:
+        return None
+    if callee.type == "identifier":
+        name = _text(callee, source)
+    elif callee.type == "member_expression":
+        obj = callee.child_by_field_name("object")
+        prop = callee.child_by_field_name("property")
+        if prop is None:
+            return None
+        name = _text(prop, source)
+        if obj is not None and obj.type == "identifier":
+            name = f"{_text(obj, source)}.{name}"
+    else:
+        return None
+    args = call.child_by_field_name("arguments")
+    if args is not None:
+        for arg in args.named_children:
+            if arg.type == "string":
+                return f"{name}({_string_value(arg, source)})"
+    return name
 
 
 def _nested_def_subtrees(def_node: TSNode) -> list[TSNode]:
