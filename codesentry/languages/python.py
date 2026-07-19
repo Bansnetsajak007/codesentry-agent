@@ -207,8 +207,21 @@ class PythonAdapter(LanguageAdapter):
         """Emit INHERITS and intra-file CALLS edges for names that resolve to exactly
         one definition in this file. Ambiguous names are left for the builder."""
 
+        types_by_id = {node.id: node.type for node in nodes}
+
         def unique_target(name: str) -> str | None:
             ids = name_to_ids.get(name, [])
+            return ids[0] if len(ids) == 1 else None
+
+        def unique_call_target(call: dict[str, object]) -> str | None:
+            # Member calls (obj.method()) may only bind to methods or classes;
+            # binding them to a same-named top-level function would be wrong.
+            ids = name_to_ids.get(str(call["name"]), [])
+            if call.get("member"):
+                ids = [
+                    i for i in ids
+                    if types_by_id[i] in (NodeType.METHOD, NodeType.CLASS)
+                ]
             return ids[0] if len(ids) == 1 else None
 
         for node in nodes:
@@ -221,7 +234,7 @@ class PythonAdapter(LanguageAdapter):
                         )
             if node.type in (NodeType.FUNCTION, NodeType.METHOD):
                 for call in node.metadata.get("calls", []):
-                    target = unique_target(call["name"])
+                    target = unique_call_target(call)
                     if target is not None and target != node.id:
                         edges.append(
                             Edge(
@@ -301,14 +314,23 @@ def _collect_calls(defn: TSNode, source: bytes) -> list[dict[str, object]]:
             continue
         if func.type == "identifier":
             name = source[func.start_byte : func.end_byte].decode("utf-8", "replace")
+            calls.append({"name": name, "line": node.start_point[0] + 1})
         elif func.type == "attribute":
             attr = func.child_by_field_name("attribute")
             if attr is None:
                 continue
             name = source[attr.start_byte : attr.end_byte].decode("utf-8", "replace")
-        else:
-            continue
-        calls.append({"name": name, "line": node.start_point[0] + 1})
+            entry: dict[str, object] = {
+                "name": name,
+                "line": node.start_point[0] + 1,
+                "member": True,
+            }
+            obj = func.child_by_field_name("object")
+            if obj is not None and obj.type == "identifier":
+                entry["recv"] = source[obj.start_byte : obj.end_byte].decode(
+                    "utf-8", "replace"
+                )
+            calls.append(entry)
     return calls
 
 

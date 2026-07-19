@@ -84,6 +84,7 @@ def stats(repo_path: Path = typer.Argument(..., help="Path to the repository."))
     if isinstance(resolution, dict):
         console.print(
             f"[bold]Unresolved calls:[/bold] {resolution.get('unresolved_calls')}  "
+            f"[bold]External calls:[/bold] {resolution.get('external_calls')}  "
             f"[bold]Skipped files:[/bold] {resolution.get('files_skipped')}  "
             f"[bold]Parse errors:[/bold] {resolution.get('files_with_parse_errors')}"
         )

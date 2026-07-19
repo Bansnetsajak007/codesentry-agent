@@ -21,7 +21,11 @@ import pathspec
 
 import codesentry.languages  # noqa: F401  (imports register the adapters)
 from codesentry.graph.schema import Edge, EdgeType, Node, NodeType
-from codesentry.languages.base import ImportIndex, get_adapter_for_file
+from codesentry.languages.base import (
+    ImportIndex,
+    _module_basename,
+    get_adapter_for_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,17 +135,44 @@ def _resolve_cross_file(graph: nx.MultiDiGraph) -> dict[str, Any]:
     existing = {(u, v, data["type"]) for u, v, data in graph.edges(data=True)}
     imported_files: dict[str, set[str]] = defaultdict(set)
 
+    # Map (file, local name) -> the indexed file that name was imported from, or
+    # None when the module is external (library/stdlib, not in the index). Module
+    # basenames count as local names so `utils.helper()` resolves through the
+    # `utils` import in Python, Go, and JS alike.
+    import_targets: dict[tuple[str, str], str | None] = {}
+
     # 1. IMPORTS edges (adapter-driven module -> file resolution).
+    ambiguous_imports: set[tuple[str, str]] = set()
     for fn in file_nodes:
         adapter = get_adapter_for_file(Path(fn.file_path))
         if adapter is None:
             continue
         for entry in fn.metadata.get("imports", []):
+            names = [str(n) for n in entry.get("names", []) if n and n != "*"]
             for module in entry.get("modules", []):
+                if not module:
+                    continue
                 target = adapter.resolve_import(module, fn.file_path, index)
-                if target and target != fn.file_path and target in index.paths:
+                if not (target and target != fn.file_path and target in index.paths):
+                    target = None
+                if target is not None:
                     imported_files[fn.file_path].add(target)
                     _add_edge(graph, existing, fn.file_path, target, EdgeType.IMPORTS)
+                basename = _module_basename(module)
+                for raw in names + ([basename] if basename else []):
+                    local = raw.split(" as ")[-1].strip()
+                    if not local:
+                        continue
+                    key = (fn.file_path, local)
+                    previous = import_targets.get(key)
+                    if previous is not None and target is not None and previous != target:
+                        ambiguous_imports.add(key)
+                    if target is not None or key not in import_targets:
+                        import_targets[key] = target
+    # A name imported from two different indexed files is ambiguous; drop it so
+    # the call falls back to (and fails) ordinary scope resolution.
+    for key in ambiguous_imports:
+        del import_targets[key]
 
     def scope_files(file_path: str) -> set[str]:
         scope = {file_path} | imported_files.get(file_path, set())
@@ -166,13 +197,77 @@ def _resolve_cross_file(graph: nx.MultiDiGraph) -> dict[str, Any]:
             return candidates[0]
         return None
 
-    def resolve_call(name: str, file_path: str, self_id: str) -> str | None:
+    method_or_class_names = {
+        node.name
+        for node in all_nodes.values()
+        if node.type in (NodeType.METHOD, NodeType.CLASS)
+    }
+    defs_by_file_name: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for nid, node in all_nodes.items():
+        if node.type in _DEF_TYPES:
+            defs_by_file_name[(node.file_path, node.name)].append(nid)
+
+    def resolve_in_module(name: str, target_file: str) -> str | None:
+        """Resolve ``name`` among the definitions of ``target_file``, falling back
+        to the file's package for package-scoped languages (Go, Java)."""
+        ids = defs_by_file_name.get((target_file, name), [])
+        if len(ids) == 1:
+            return ids[0]
+        package = index.package_of.get(target_file)
+        if ids or not package:
+            return None
+        files = set(index.files_by_package.get(package, []))
+        candidates = [
+            nid
+            for nid in defs_by_name.get(name, [])
+            if all_nodes[nid].file_path in files
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_call(call: dict[str, Any], file_path: str, self_id: str) -> str | None:
+        name = str(call["name"])
+        if call.get("member"):
+            recv = call.get("recv")
+            if isinstance(recv, str) and (file_path, recv) in import_targets:
+                target_file = import_targets[(file_path, recv)]
+                if target_file is None:
+                    return None  # method on an external module object
+                return resolve_in_module(name, target_file)
+            # Unknown receiver: bind only to a method (or, for constructor calls
+            # like `new pkg.Client()`, a class) — never a same-named function.
+            return resolve_name(
+                name, file_path, self_id, (NodeType.METHOD,)
+            ) or resolve_name(name, file_path, self_id, (NodeType.CLASS,))
+        if (file_path, name) in import_targets:
+            target_file = import_targets[(file_path, name)]
+            if target_file is None:
+                return None  # imported from an external module
+            resolved = resolve_in_module(name, target_file)
+            if resolved is not None and resolved != self_id:
+                return resolved
         # A bare name is first treated as a function/method call, then (e.g. for
         # constructors) as a class instantiation, so class/constructor name clashes
         # do not make either ambiguous.
         return resolve_name(
             name, file_path, self_id, (NodeType.FUNCTION, NodeType.METHOD)
         ) or resolve_name(name, file_path, self_id, (NodeType.CLASS,))
+
+    def call_is_external(call: dict[str, Any], file_path: str) -> bool:
+        """True when a failed call cannot target indexed code at all: its name (or
+        receiver) comes from an external module, or no indexed definition of a
+        compatible kind bears the name anywhere in the repo."""
+        name = str(call["name"])
+        if call.get("member"):
+            recv = call.get("recv")
+            if isinstance(recv, str):
+                key = (file_path, recv)
+                if key in import_targets and import_targets[key] is None:
+                    return True
+            return name not in method_or_class_names
+        key = (file_path, name)
+        if key in import_targets and import_targets[key] is None:
+            return True
+        return name not in defs_by_name
 
     # 2. Go receiver methods whose struct lives in another file of the package.
     for nid, node in all_nodes.items():
@@ -187,15 +282,27 @@ def _resolve_cross_file(graph: nx.MultiDiGraph) -> dict[str, Any]:
             _detach_file_container(graph, all_nodes, nid)
             _add_edge(graph, existing, target, nid, EdgeType.CONTAINS)
 
-    # 3. Cross-file CALLS.
+    # 3. Cross-file CALLS. Calls the adapters already bound intra-file are
+    # skipped so they are neither re-resolved nor miscounted.
+    locally_resolved = {
+        (u, data["edge"].metadata.get("line"))
+        for u, _, data in graph.edges(data=True)
+        if data["type"] == EdgeType.CALLS.value
+    }
     unresolved_calls = 0
+    external_calls = 0
     for nid, node in all_nodes.items():
         if node.type not in (NodeType.FUNCTION, NodeType.METHOD):
             continue
         for call in node.metadata.get("calls", []):
-            target = resolve_call(call["name"], node.file_path, nid)
+            if (nid, call["line"]) in locally_resolved:
+                continue
+            target = resolve_call(call, node.file_path, nid)
             if target is None:
-                unresolved_calls += 1
+                if call_is_external(call, node.file_path):
+                    external_calls += 1
+                else:
+                    unresolved_calls += 1
                 continue
             _add_edge(
                 graph, existing, nid, target, EdgeType.CALLS,
@@ -223,6 +330,7 @@ def _resolve_cross_file(graph: nx.MultiDiGraph) -> dict[str, Any]:
         "nodes": graph.number_of_nodes(),
         "edges": graph.number_of_edges(),
         "unresolved_calls": unresolved_calls,
+        "external_calls": external_calls,
     }
 
 
@@ -267,13 +375,14 @@ def _detach_file_container(
 def _log_summary(graph: nx.MultiDiGraph, summary: dict[str, Any]) -> None:
     logger.info(
         "Indexed %d files (%d skipped, %d with parse errors): %d nodes, %d edges, "
-        "%d unresolved calls",
+        "%d unresolved calls, %d external calls",
         summary["files_indexed"],
         summary["files_skipped"],
         summary["files_with_parse_errors"],
         summary["nodes"],
         summary["edges"],
         summary["unresolved_calls"],
+        summary["external_calls"],
     )
 
 

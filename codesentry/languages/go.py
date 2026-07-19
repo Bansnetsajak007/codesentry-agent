@@ -263,8 +263,21 @@ class GoAdapter(LanguageAdapter):
         edges: list[Edge],
         name_to_ids: dict[str, list[str]],
     ) -> None:
+        types_by_id = {node.id: node.type for node in nodes}
+
         def unique_target(name: str) -> str | None:
             ids = name_to_ids.get(name, [])
+            return ids[0] if len(ids) == 1 else None
+
+        def unique_call_target(call: dict[str, object]) -> str | None:
+            # Selector calls (x.Method()) may only bind to methods or types;
+            # binding them to a same-named package-level function would be wrong.
+            ids = name_to_ids.get(str(call["name"]), [])
+            if call.get("member"):
+                ids = [
+                    i for i in ids
+                    if types_by_id[i] in (NodeType.METHOD, NodeType.CLASS)
+                ]
             return ids[0] if len(ids) == 1 else None
 
         for node in nodes:
@@ -277,7 +290,7 @@ class GoAdapter(LanguageAdapter):
                         )
             if node.type in (NodeType.FUNCTION, NodeType.METHOD):
                 for call in node.metadata.get("calls", []):
-                    target = unique_target(call["name"])
+                    target = unique_call_target(call)
                     if target is not None and target != node.id:
                         edges.append(
                             Edge(
@@ -391,15 +404,20 @@ def _collect_calls(node: TSNode, source: bytes) -> list[dict[str, object]]:
         if func is None:
             continue
         if func.type == "identifier":
-            name = _text(func, source)
+            calls.append({"name": _text(func, source), "line": sub.start_point[0] + 1})
         elif func.type == "selector_expression":
             field = func.child_by_field_name("field")
             if field is None:
                 continue
-            name = _text(field, source)
-        else:
-            continue
-        calls.append({"name": name, "line": sub.start_point[0] + 1})
+            entry: dict[str, object] = {
+                "name": _text(field, source),
+                "line": sub.start_point[0] + 1,
+                "member": True,
+            }
+            operand = func.child_by_field_name("operand")
+            if operand is not None and operand.type == "identifier":
+                entry["recv"] = _text(operand, source)
+            calls.append(entry)
     return calls
 
 

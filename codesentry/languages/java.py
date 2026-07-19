@@ -220,8 +220,21 @@ class JavaAdapter(LanguageAdapter):
         edges: list[Edge],
         name_to_ids: dict[str, list[str]],
     ) -> None:
+        types_by_id = {node.id: node.type for node in nodes}
+
         def unique_target(name: str) -> str | None:
             ids = name_to_ids.get(name, [])
+            return ids[0] if len(ids) == 1 else None
+
+        def unique_call_target(call: dict[str, object]) -> str | None:
+            # Member calls (obj.method()) may only bind to methods or classes;
+            # binding them to a same-named unrelated definition would be wrong.
+            ids = name_to_ids.get(str(call["name"]), [])
+            if call.get("member"):
+                ids = [
+                    i for i in ids
+                    if types_by_id[i] in (NodeType.METHOD, NodeType.CLASS)
+                ]
             return ids[0] if len(ids) == 1 else None
 
         for node in nodes:
@@ -240,7 +253,7 @@ class JavaAdapter(LanguageAdapter):
                         )
             if node.type is NodeType.METHOD:
                 for call in node.metadata.get("calls", []):
-                    target = unique_target(call["name"])
+                    target = unique_call_target(call)
                     if target is not None and target != node.id:
                         edges.append(
                             Edge(
@@ -361,15 +374,25 @@ def _collect_calls(decl: TSNode, source: bytes) -> list[dict[str, object]]:
     for sub in _walk(decl):
         if sub.type == "method_invocation":
             name_node = sub.child_by_field_name("name")
+            if name_node is None:
+                continue
+            entry: dict[str, object] = {
+                "name": _bare_name(name_node, source),
+                "line": sub.start_point[0] + 1,
+            }
+            obj = sub.child_by_field_name("object")
+            if obj is not None:
+                entry["member"] = True
+                if obj.type == "identifier":
+                    entry["recv"] = _text(obj, source)
+            calls.append(entry)
         elif sub.type == "object_creation_expression":
             name_node = sub.child_by_field_name("type")
-        else:
-            continue
-        if name_node is None:
-            continue
-        calls.append(
-            {"name": _bare_name(name_node, source), "line": sub.start_point[0] + 1}
-        )
+            if name_node is None:
+                continue
+            calls.append(
+                {"name": _bare_name(name_node, source), "line": sub.start_point[0] + 1}
+            )
     return calls
 
 

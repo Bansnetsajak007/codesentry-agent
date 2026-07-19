@@ -268,8 +268,21 @@ class JavaScriptAdapter(LanguageAdapter):
         edges: list[Edge],
         name_to_ids: dict[str, list[str]],
     ) -> None:
+        types_by_id = {node.id: node.type for node in nodes}
+
         def unique_target(name: str) -> str | None:
             ids = name_to_ids.get(name, [])
+            return ids[0] if len(ids) == 1 else None
+
+        def unique_call_target(call: dict[str, object]) -> str | None:
+            # Member calls (obj.method()) may only bind to methods or classes;
+            # binding them to a same-named top-level function would be wrong.
+            ids = name_to_ids.get(str(call["name"]), [])
+            if call.get("member"):
+                ids = [
+                    i for i in ids
+                    if types_by_id[i] in (NodeType.METHOD, NodeType.CLASS)
+                ]
             return ids[0] if len(ids) == 1 else None
 
         for node in nodes:
@@ -282,7 +295,7 @@ class JavaScriptAdapter(LanguageAdapter):
                         )
             if node.type in (NodeType.FUNCTION, NodeType.METHOD):
                 for call in node.metadata.get("calls", []):
-                    target = unique_target(call["name"])
+                    target = unique_call_target(call)
                     if target is not None and target != node.id:
                         edges.append(
                             Edge(
@@ -347,15 +360,20 @@ def _collect_calls(node: TSNode, source: bytes) -> list[dict[str, object]]:
         if callee is None:
             continue
         if callee.type == "identifier":
-            name = _text(callee, source)
+            calls.append({"name": _text(callee, source), "line": sub.start_point[0] + 1})
         elif callee.type == "member_expression":
             prop = callee.child_by_field_name("property")
             if prop is None:
                 continue
-            name = _text(prop, source)
-        else:
-            continue
-        calls.append({"name": name, "line": sub.start_point[0] + 1})
+            entry: dict[str, object] = {
+                "name": _text(prop, source),
+                "line": sub.start_point[0] + 1,
+                "member": True,
+            }
+            obj = callee.child_by_field_name("object")
+            if obj is not None and obj.type == "identifier":
+                entry["recv"] = _text(obj, source)
+            calls.append(entry)
     return calls
 
 
