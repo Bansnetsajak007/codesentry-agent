@@ -123,3 +123,37 @@ def test_summary_is_attached() -> None:
     assert summary["files_skipped"] == 1  # the .gitkeep has no adapter
     assert summary["files_with_parse_errors"] == 0
     assert "unresolved_calls" in summary
+    assert "external_calls" in summary
+
+
+def test_member_call_does_not_bind_to_same_named_function(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def json():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text(
+        "def run(res):\n    return res.json()\n", encoding="utf-8"
+    )
+    graph = build_graph(tmp_path)
+    assert ("b.py::run", "a.py::json") not in _edges(graph, EdgeType.CALLS)
+    assert graph.graph["summary"]["external_calls"] == 1
+    assert graph.graph["summary"]["unresolved_calls"] == 0
+
+
+def test_member_call_resolves_through_module_import(tmp_path: Path) -> None:
+    (tmp_path / "utils.py").write_text(
+        "def helper():\n    return 1\n", encoding="utf-8"
+    )
+    (tmp_path / "main.py").write_text(
+        "import utils\n\n\ndef run():\n    return utils.helper()\n", encoding="utf-8"
+    )
+    graph = build_graph(tmp_path)
+    assert ("main.py::run", "utils.py::helper") in _edges(graph, EdgeType.CALLS)
+
+
+def test_calls_into_external_modules_are_classified_external(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(
+        "from requests import get\n\n\ndef fetch_all():\n    return get('x')\n",
+        encoding="utf-8",
+    )
+    graph = build_graph(tmp_path)
+    summary = graph.graph["summary"]
+    assert summary["unresolved_calls"] == 0
+    assert summary["external_calls"] == 1

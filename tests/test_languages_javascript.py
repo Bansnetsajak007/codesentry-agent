@@ -99,3 +99,45 @@ def test_indexer_handles_mixed_python_and_javascript(tmp_path: Path) -> None:
     (tmp_path / "b.js").write_bytes((FIXTURE / "utils.js").read_bytes())
     graph = build_graph(tmp_path)
     assert per_language_file_counts(graph) == {"javascript": 1, "python": 1}
+
+
+def test_nested_functions_captured() -> None:
+    src = (
+        b"export default function Products() {\n"
+        b"    const getProducts = async () => { return fetch('/api'); };\n"
+        b"    function deleteProduct(id) { return getProducts(); }\n"
+        b"    deleteProduct(1);\n"
+        b"    return getProducts();\n"
+        b"}\n"
+    )
+    nodes, edges = JavaScriptAdapter().parse_file(Path("app.js"), src)
+    by_q = _by_qname(nodes)
+    assert by_q["Products.getProducts"].type is NodeType.FUNCTION
+    assert by_q["Products.deleteProduct"].type is NodeType.FUNCTION
+    contains = {(e.source_id, e.target_id) for e in edges if e.type is EdgeType.CONTAINS}
+    assert ("app.js::Products", "app.js::Products.getProducts") in contains
+    calls = {(e.source_id, e.target_id) for e in edges if e.type is EdgeType.CALLS}
+    assert ("app.js::Products", "app.js::Products.deleteProduct") in calls
+    assert ("app.js::Products.deleteProduct", "app.js::Products.getProducts") in calls
+    parent_call_names = {c["name"] for c in by_q["Products"].metadata["calls"]}
+    assert "fetch" not in parent_call_names  # belongs to the nested function
+
+
+def test_top_level_route_callbacks_captured() -> None:
+    src = (
+        b"router.post('/insertproduct', async (req, res) => { res.json(1); });\n"
+        b"app.listen(5000, () => {});\n"
+    )
+    nodes, _ = JavaScriptAdapter().parse_file(Path("router.js"), src)
+    by_q = _by_qname(nodes)
+    assert by_q["router.post(/insertproduct)"].type is NodeType.FUNCTION
+    assert by_q["app.listen"].type is NodeType.FUNCTION
+
+
+def test_member_calls_carry_member_flag_and_receiver() -> None:
+    src = b"function run(res) { res.json(1); helper(); }\n"
+    nodes, _ = JavaScriptAdapter().parse_file(Path("m.js"), src)
+    calls = {str(c["name"]): c for c in _by_qname(nodes)["run"].metadata["calls"]}
+    assert calls["json"].get("member") is True
+    assert calls["json"].get("recv") == "res"
+    assert "member" not in calls["helper"]
