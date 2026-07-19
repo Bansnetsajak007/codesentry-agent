@@ -39,7 +39,7 @@ def run_agent(
     graph: nx.MultiDiGraph,
     llm: LLMClient,
     repo_root: Path,
-    max_iterations: int = 15,
+    max_iterations: int = 50,
     system_prompt: str = QA_SYSTEM_PROMPT,
 ) -> AnswerWithCitations:
     """Run the tool-using agent loop for ``query`` against ``graph`` and return a
