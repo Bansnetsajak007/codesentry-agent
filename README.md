@@ -33,7 +33,7 @@ strict order defined in `docs/PHASE_1_SPEC.md`:
 | 13 | Diff review + `review` command | ✅ |
 | 14 | This README | ✅ |
 
-**Quality gates:** `101 passing tests`, `mypy --strict` clean on `codesentry/`,
+**Quality gates:** `113 passing tests`, `mypy --strict` clean on `codesentry/`,
 no `openai` import outside `agent/llm.py`. No test ever calls the real API.
 
 > **Known gap:** the spec lists a `codesentry-agent languages` command that is not yet
@@ -47,7 +47,7 @@ no `openai` import outside `agent/llm.py`. No test ever calls the real API.
 | Language | Extensions | Notes |
 |----------|-----------|-------|
 | Python | `.py`, `.pyi` | decorators, docstrings, intra-file calls |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | classes, arrow/function-expression declarations, ESM + `require`, JSDoc |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | classes, arrow/function-expression declarations, nested functions, top-level route callbacks (`router.post(...)`), ESM + `require`, JSDoc |
 | TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` | interfaces & type aliases as `CLASS` nodes, `implements`, generics, `import type` |
 | Go | `.go` | struct/interface types, receiver methods, embedding → `INHERITS`; interface satisfaction is **not** resolved in Phase 1 |
 | Java | `.java` | `extends` → `INHERITS`, `implements` → `IMPLEMENTS`, nested classes, annotations |
@@ -84,7 +84,11 @@ Core ideas:
 - **Cross-file resolution** (`graph/builder.py`) connects the per-file graphs.
   The only language-specific step — mapping an import to a file — is delegated to
   each adapter's `resolve_import`; everything else is driven off universal
-  metadata, so the builder never branches on language.
+  metadata, so the builder never branches on language. Member calls
+  (`obj.method()`) only ever bind to methods/classes, and receivers that name an
+  import resolve inside the imported file. Calls that cannot target indexed code
+  at all (library imports, builtins, locals) are counted as *external* rather
+  than *unresolved*, so `unresolved_calls` measures real resolution misses.
 - **Retrieval** (`retrieval/`) turns the graph into LLM context: `extract_subgraph`
   (neighbors along any edge type, 1–2 hops) and `get_snippet` (exact source lines).
 - **Agent** (`agent/`) runs a hand-rolled tool loop. The nine tools query the graph
@@ -168,7 +172,7 @@ uv run codesentry-agent stats /path/to/repo
 ```
 Repository: /path/to/repo
 Nodes: 66  Edges: 81
-Unresolved calls: 16  Skipped files: 0  Parse errors: 0
+Unresolved calls: 2  External calls: 14  Skipped files: 0  Parse errors: 0
   Files per language
 ┏━━━━━━━━━━━━┳━━━━━━━┓
 ┃ Language   ┃ Files ┃
