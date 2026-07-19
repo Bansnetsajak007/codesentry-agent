@@ -174,12 +174,14 @@ class JavaScriptAdapter(LanguageAdapter):
         nodes: list[Node],
         edges: list[Edge],
         name_to_ids: dict[str, list[str]],
+        node_type: NodeType = NodeType.FUNCTION,
     ) -> None:
         qualified = f"{prefix}{name}"
         node_id = make_node_id(file_path, qualified)
+        nested = _nested_def_subtrees(def_node)
         node = Node(
             id=node_id,
-            type=NodeType.METHOD if prefix else NodeType.FUNCTION,
+            type=node_type,
             name=name,
             qualified_name=qualified,
             file_path=file_path,
@@ -188,13 +190,25 @@ class JavaScriptAdapter(LanguageAdapter):
             end_line=span.end_point[0] + 1,
             signature=_function_signature(def_node, name, source),
             docstring=jsdoc,
-            metadata={"calls": _collect_calls(def_node, source)},
+            metadata={
+                "calls": _collect_calls(
+                    def_node, source, frozenset(n.id for n in nested)
+                )
+            },
         )
         nodes.append(node)
         name_to_ids.setdefault(name, []).append(node_id)
         edges.append(
             Edge(source_id=container_id, target_id=node_id, type=EdgeType.CONTAINS)
         )
+        # Functions defined inside this function (React handlers, helpers) become
+        # their own nodes, contained by and qualified under this one.
+        body = def_node.child_by_field_name("body")
+        if body is not None and body.type == "statement_block":
+            self._collect_definitions(
+                body, source, file_path, f"{qualified}.", node_id,
+                nodes, edges, name_to_ids,
+            )
 
     def _add_class(
         self,
@@ -260,6 +274,7 @@ class JavaScriptAdapter(LanguageAdapter):
             self._add_function(
                 member, member, name, prefix, file_path, container_id,
                 _jsdoc_before(member, source), source, nodes, edges, name_to_ids,
+                node_type=NodeType.METHOD,
             )
 
     def _resolve_local_edges(
@@ -307,10 +322,34 @@ class JavaScriptAdapter(LanguageAdapter):
                         )
 
 
-def _walk(node: TSNode):  # type: ignore[no-untyped-def]
+def _walk(node: TSNode, skip_ids: frozenset[int] = frozenset()):  # type: ignore[no-untyped-def]
     yield node
     for child in node.named_children:
-        yield from _walk(child)
+        if child.id in skip_ids:
+            continue
+        yield from _walk(child, skip_ids)
+
+
+def _nested_def_subtrees(def_node: TSNode) -> list[TSNode]:
+    """Subtrees directly inside ``def_node``'s statement-block body that are
+    captured as their own definition nodes, so their calls are attributed to the
+    nested definition rather than to ``def_node``."""
+
+    body = def_node.child_by_field_name("body")
+    if body is None or body.type != "statement_block":
+        return []
+    found: list[TSNode] = []
+    for child in body.named_children:
+        if child.type in ("function_declaration", "class_declaration"):
+            found.append(child)
+        elif child.type in ("lexical_declaration", "variable_declaration"):
+            for declarator in child.named_children:
+                if declarator.type != "variable_declarator":
+                    continue
+                value = declarator.child_by_field_name("value")
+                if value is not None and value.type in (*_FUNCTION_VALUES, "class"):
+                    found.append(value)
+    return found
 
 
 def _text(node: TSNode, source: bytes) -> str:
@@ -348,9 +387,11 @@ def _base_names(class_node: TSNode, source: bytes) -> list[str]:
     ]
 
 
-def _collect_calls(node: TSNode, source: bytes) -> list[dict[str, object]]:
+def _collect_calls(
+    node: TSNode, source: bytes, skip_ids: frozenset[int] = frozenset()
+) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
-    for sub in _walk(node):
+    for sub in _walk(node, skip_ids):
         if sub.type == "call_expression":
             callee = sub.child_by_field_name("function")
         elif sub.type == "new_expression":
